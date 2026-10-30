@@ -1,0 +1,37 @@
+services:
+  # ── Node.js / Express Backend ──────────────────────────────────────────────
+  - type: web
+    name: crams-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: MONGODB_URI
+        sync: false        # set this in the Render dashboard (keep secret)
+      - key: JWT_SECRET
+        sync: false        # set this in the Render dashboard (keep secret)
+      - key: JWT_EXPIRE
+        value: 7d
+      - key: ML_SERVICE_URL
+        fromService:
+          name: crams-ml-api
+          type: web
+          property: host
+      - key: ALLOWED_ORIGINS
+        sync: false        # set to your Vercel URL after deploying frontend
+
+  # ── Python / FastAPI ML API ────────────────────────────────────────────────
+  - type: web
+    name: crams-ml-api
+    runtime: python
+    rootDir: ml
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn ml_api:app --host 0.0.0.0 --port 8000
+    envVars:
+      - key: PORT
+        value: 8000

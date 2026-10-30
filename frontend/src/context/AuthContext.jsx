@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 
+// In production, VITE_API_BASE_URL is set to the deployed backend URL.
+// In dev, it falls back to '' so the Vite dev-server proxy handles /api/* calls.
+if (import.meta.env.VITE_API_BASE_URL) {
+  axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL;
+}
+
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
