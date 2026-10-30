@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   RadarChart, PolarGrid, PolarAngleAxis, Radar,
 } from 'recharts';
 import RiskBadge from '../components/RiskBadge';
-import { ShieldAlert, TrendingUp, AlertTriangle, CheckCircle, Activity } from 'lucide-react';
+import { ShieldAlert, TrendingUp, AlertTriangle, CheckCircle, Activity, BrainCircuit, RefreshCw, Clock } from 'lucide-react';
 
 const ScoreGauge = ({ score, level }) => {
   const color = level === 'Critical' ? '#ef4444' : level === 'High' ? '#f97316' : level === 'Medium' ? '#f59e0b' : '#10b981';
@@ -52,6 +52,187 @@ const CategoryCard = ({ name, score }) => {
     </div>
   );
 };
+
+// ── Auto-Assessment Panel ─────────────────────────────────────────────────────
+const LEVEL_STYLES = {
+  Low:      { bg: 'bg-green-500/10',  border: 'border-green-500/30',  text: 'text-green-400',  badge: 'bg-green-500/20 text-green-300',  bar: 'bg-green-500' },
+  Medium:   { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-400', badge: 'bg-yellow-500/20 text-yellow-300', bar: 'bg-yellow-500' },
+  High:     { bg: 'bg-orange-500/10', border: 'border-orange-500/30', text: 'text-orange-400', badge: 'bg-orange-500/20 text-orange-300', bar: 'bg-orange-500' },
+  Critical: { bg: 'bg-red-500/10',    border: 'border-red-500/30',    text: 'text-red-400',    badge: 'bg-red-500/20 text-red-300',       bar: 'bg-red-500'   },
+};
+
+function AutoAssessPanel() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [error, setError]     = useState('');
+
+  const fetchAssessment = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    setError('');
+    try {
+      const res = await axios.get('/api/ml/auto-assess');
+      setData(res.data);
+    } catch (err) {
+      if (err.response?.status === 503) {
+        setError('Assessment initialising — ML service may still be starting up. Refresh in a moment.');
+      } else {
+        setError(err.response?.data?.message || err.message || 'Could not load assessment.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchAssessment(); }, [fetchAssessment]);
+
+  const triggerRun = async () => {
+    setRunning(true);
+    setError('');
+    try {
+      await axios.post('/api/ml/auto-assess/run');
+      // Poll until the new result arrives (max ~15 s)
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        await fetchAssessment(true);
+        if (attempts >= 15) clearInterval(poll);
+      }, 1000);
+      setTimeout(() => clearInterval(poll), 16000);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to trigger assessment.');
+    } finally {
+      setTimeout(() => setRunning(false), 3000);
+    }
+  };
+
+  const level = data?.predicted_risk_level;
+  const ls    = level ? (LEVEL_STYLES[level] || LEVEL_STYLES.Medium) : null;
+  const top5  = data?.top_contributors || [];
+
+  const assessedAt = data?.assessed_at
+    ? new Date(data.assessed_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
+    : null;
+
+  return (
+    <div className="bg-[#1e2130] rounded-xl border border-[#2a2d3e] overflow-hidden">
+      {/* Header */}
+      <div className="px-5 py-4 border-b border-[#2a2d3e] flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <BrainCircuit size={18} className="text-indigo-400" />
+          <h3 className="font-semibold text-white">Automated ML Risk Assessment</h3>
+          <span className="text-xs text-slate-400 bg-[#252840] px-2 py-0.5 rounded-full">Runs every 60 min</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {assessedAt && (
+            <span className="flex items-center gap-1 text-xs text-slate-500">
+              <Clock size={11} /> Last run: {assessedAt}
+            </span>
+          )}
+          <button
+            onClick={triggerRun}
+            disabled={running || loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-indigo-600/20 border border-indigo-500/30
+              text-indigo-300 hover:bg-indigo-600/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <RefreshCw size={12} className={running ? 'animate-spin' : ''} />
+            {running ? 'Running…' : 'Run now'}
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="p-5">
+        {loading && (
+          <div className="flex items-center gap-3 text-slate-400 text-sm py-4">
+            <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+            Loading latest assessment…
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="flex items-start gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-4 py-3">
+            <AlertTriangle size={15} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-yellow-300">{error}</p>
+          </div>
+        )}
+
+        {!loading && data && ls && (
+          <div className="space-y-5">
+            {/* Predicted level + probabilities */}
+            <div className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center gap-4 ${ls.bg} ${ls.border}`}>
+              <div>
+                <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Predicted Risk Level</p>
+                <p className={`text-3xl font-bold ${ls.text}`}>{level}</p>
+              </div>
+              {data.class_probabilities && (
+                <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {Object.entries(data.class_probabilities)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([cls, prob]) => {
+                      const s = LEVEL_STYLES[cls] || LEVEL_STYLES.Medium;
+                      const pct = (prob * 100).toFixed(1);
+                      return (
+                        <div key={cls} className="bg-[#1e2130] rounded-lg p-2.5">
+                          <p className={`text-xs font-medium ${s.text}`}>{cls}</p>
+                          <div className="w-full bg-[#2a2d3e] rounded-full h-1.5 my-1">
+                            <div className={`h-1.5 rounded-full ${s.bar}`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <p className="text-white text-sm font-semibold">{pct}%</p>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+
+            {/* Top 5 SHAP contributors */}
+            {top5.length > 0 && (
+              <div>
+                <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">
+                  Top Risk Drivers <span className="normal-case text-slate-600">(SHAP — based on current monitoring snapshot)</span>
+                </p>
+                <div className="space-y-2">
+                  {top5.map((c, i) => {
+                    const isRisk = c.direction === 'increases_risk';
+                    const maxShap = top5[0] ? Math.abs(top5[0].shap_value) : 1;
+                    const pct = Math.min((Math.abs(c.shap_value) / maxShap) * 100, 100).toFixed(1);
+                    return (
+                      <div key={c.key} className="flex items-center gap-3 bg-[#252840] rounded-lg px-4 py-3">
+                        <span className="text-xs font-bold text-slate-500 w-4">#{i + 1}</span>
+                        <div className="w-44 flex-shrink-0">
+                          <p className="text-sm font-medium text-slate-200 truncate">{c.feature}</p>
+                          <p className="text-xs text-slate-500">value: {c.value}</p>
+                        </div>
+                        <div className="flex-1">
+                          <div className="w-full bg-[#1e2130] rounded-full h-2">
+                            <div
+                              className={`h-2 rounded-full transition-all duration-500 ${isRisk ? 'bg-red-500' : 'bg-green-500'}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="w-24 text-right flex-shrink-0">
+                          <span className={`text-xs font-semibold ${isRisk ? 'text-red-400' : 'text-green-400'}`}>
+                            {isRisk ? '▲ increases' : '▼ decreases'}
+                          </span>
+                          <p className="text-xs text-slate-500">{Math.abs(c.shap_value).toFixed(3)}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-slate-600 mt-3">
+                  SHAP values are relative to an average-organisation baseline. Red = pushes toward higher risk, green = mitigates risk.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
@@ -184,6 +365,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Automated ML Assessment */}
+      <AutoAssessPanel />
     </div>
   );
 }
